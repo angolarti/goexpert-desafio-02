@@ -11,6 +11,20 @@ import (
 	"time"
 )
 
+type CepType interface {
+	*ViaCEP | *ApiCEP
+}
+
+type CEP[T CepType] struct {
+	Body T
+}
+
+func RefCEPType[T CepType](cep T) *CEP[T] {
+	return &CEP[T]{
+		Body: cep,
+	}
+}
+
 type ViaCEP struct {
 	Cep         string `json:"cep"`
 	Logradouro  string `json:"logradouro"`
@@ -40,43 +54,41 @@ func main() {
 	ctx, cancel := context.WithTimeout(ctx, time.Second*1)
 	defer cancel()
 
-	go request(ctx, "https://cdn.apicep.com/file/apicep", "06550000")
-	go request(ctx, "http://viacep.com.br/ws", "06233030")
+	select {
+	case <-time.After(time.Second * 1):
+		go request(ctx, "https://cdn.apicep.com/file/apicep", "06550000", &ApiCEP{})
+		go request(ctx, "http://viacep.com.br/ws", "06233030", &ViaCEP{})
+		time.Sleep(10 * time.Second)
+		return
+	case <-ctx.Done():
+		err := ctx.Err()
+		fmt.Println(err.Error())
+	}
 
-	time.Sleep(2 * time.Second)
 }
 
-func request(ctx context.Context, url string, cep string) {
+func request[T CepType](ctx context.Context, url string, cep string, api T) {
 
 	if strings.Contains(url, "apicep") {
 		cep = maskCEP(cep)
 		url = fmt.Sprintf("%s/%s.json", url, cep)
-		apiCEP, err := BuscaAPICep(ctx, url)
-		if err != nil {
-			println(err.Error())
-		}
-		data, err := json.Marshal(apiCEP)
-		if err != nil {
-			println(err.Error())
-		}
-		fmt.Printf("API: %s\n", url)
-		fmt.Println("Resultado:", string(data))
-		os.Exit(0)
-
 	} else if strings.Contains(url, "viacep") {
 		url = fmt.Sprintf("%s/%s/json", url, cep)
-		viaCep, err := BuscaViaCep(ctx, url)
-		if err != nil {
-			println(err.Error())
-		}
-		data, err := json.Marshal(viaCep)
-		if err != nil {
-			println(err.Error())
-		}
-		fmt.Printf("API: %s/\n", url)
-		fmt.Println("Resultado:", string(data))
-		os.Exit(0)
 	}
+	response, err := BauscaCEP(ctx, "GET", url, api)
+
+	if err != nil {
+		println(err.Error())
+	}
+
+	data, err := json.Marshal(response)
+	if err != nil {
+		println(err.Error())
+	}
+	fmt.Printf("API: %s\n", url)
+	fmt.Println("Resultado:", string(data))
+	os.Exit(0)
+
 }
 
 func maskCEP(cep string) string {
@@ -88,8 +100,8 @@ func maskCEP(cep string) string {
 	return cep
 }
 
-func BuscaViaCep(ctx context.Context, url string) (*ViaCEP, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+func BauscaCEP[T CepType](ctx context.Context, method string, url string, object T) (*T, error) {
+	req, err := http.NewRequestWithContext(ctx, method, url, nil)
 
 	if err != nil {
 		return nil, err
@@ -105,37 +117,12 @@ func BuscaViaCep(ctx context.Context, url string) (*ViaCEP, error) {
 		return nil, err
 	}
 
-	var c ViaCEP
-	err = json.Unmarshal(body, &c)
+	c := RefCEPType(object)
+
+	err = json.Unmarshal(body, c.Body)
 	if err != nil {
 		return nil, err
 	}
 
-	return &c, nil
-}
-
-func BuscaAPICep(ctx context.Context, url string) (*ApiCEP, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-
-	if err != nil {
-		return nil, err
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		panic(err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	var c ApiCEP
-	err = json.Unmarshal(body, &c)
-	if err != nil {
-		return nil, err
-	}
-
-	return &c, nil
+	return &c.Body, nil
 }
